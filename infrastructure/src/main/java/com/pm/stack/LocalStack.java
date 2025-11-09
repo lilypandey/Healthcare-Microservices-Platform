@@ -1,17 +1,24 @@
 package com.pm.stack;
 
+import software.amazon.awscdk.services.ecs.*;
 import software.amazon.awscdk.*;
 import software.amazon.awscdk.services.ec2.*;
 import software.amazon.awscdk.services.ec2.InstanceType;
+import software.amazon.awscdk.services.ecs.Protocol;
+import software.amazon.awscdk.services.logs.LogGroup;
+import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.msk.CfnCluster;
 import software.amazon.awscdk.services.rds.*;
 import software.amazon.awscdk.services.route53.CfnHealthCheck;
 
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 public class LocalStack extends Stack {
 
     private final Vpc vpc;
+    private final software.amazon.awscdk.services.ecs.Cluster ecsCluster;
     public LocalStack(final App scope, final String id, final StackProps props){
         super(scope, id, props);
 
@@ -24,6 +31,8 @@ public class LocalStack extends Stack {
         CfnHealthCheck patientDbHeathCheck = createDbHeathCheck(patientServiceDb, "PatientServiceDBHealthCheck");
 
         CfnCluster mskCluster = createMskCluster();
+
+        this.ecsCluster=createEcsCluster();
     }
 
     private Vpc createVpc(){
@@ -74,6 +83,40 @@ public class LocalStack extends Stack {
                                 .collect(Collectors.toList()))
                         .brokerAzDistribution("DEFAULT")
                         .build())
+                .build();
+    }
+//auth-service.patient-management.local
+    private Cluster createEcsCluster(){
+        return Cluster.Builder.create(this, "PatientManagementCluster")
+                .vpc(vpc)
+                .defaultCloudMapNamespace(CloudMapNamespaceOptions.builder()
+                        .name("patient-management.local")
+                        .build())
+                .build();
+    }
+
+    private FargateService createFargateService(String id, String imageName, List<Integer> ports, DatabaseInstance db, Map<String, String> additionalEnvVars){
+        FargateTaskDefinition taskDefinition = FargateTaskDefinition.Builder.create(this, id + "Task")
+                .cpu(256)
+                .memoryLimitMiB(512)
+                .build();
+
+        ContainerDefinitionOptions containerOptions = ContainerDefinitionOptions.builder()
+                .image(ContainerImage.fromRegistry(imageName))
+                .portMappings(ports.stream()
+                        .map(port->PortMapping.builder()
+                                .containerPort(port)
+                                .hostPort(port)
+                                .protocol(Protocol.TCP)
+                                .build())
+                        .toList())
+                .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
+                                .logGroup(LogGroup.Builder.create(this, id + "LogGroup")
+                                        .logGroupName("/ecs/" + imageName)
+                                        .removalPolicy(RemovalPolicy.DESTROY)
+                                        .retention(RetentionDays.ONE_DAY)
+                                        .build())
+                        .build()))
                 .build();
     }
 
